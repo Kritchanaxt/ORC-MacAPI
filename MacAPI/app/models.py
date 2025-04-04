@@ -1,4 +1,3 @@
-# File: app/models.py
 from sqlalchemy import Column, Integer, String, Float, DateTime
 from sqlalchemy.sql import func
 from app.database import Base
@@ -19,3 +18,5 @@ class ProcessingResult(Base):
     result = Column(String)
     processing_time = Column(Float)
     created_at = Column(DateTime, default=func.now())
+
+    

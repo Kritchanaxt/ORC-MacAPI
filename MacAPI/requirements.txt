@@ -9,3 +9,4 @@ pyobjc-core==9.2
 pyobjc-framework-Cocoa==9.2
 pyobjc-framework-Quartz==9.2
 pyobjc-framework-Vision==9.2
+pyobjc-framework-VisionKit==9.2
