@@ -1,4 +1,3 @@
-# File: app/main.py
 import time
 import cv2
 import numpy as np
@@ -8,6 +7,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 import io
 from PIL import Image
+from datetime import datetime
 
 from app.database import get_db, engine, Base
 from app import models
@@ -25,6 +25,9 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Document Processing API", 
               description="API for OCR, face quality, and card detection using Vision framework. Supports multiple languages including Thai (th) and English (en).")
 
+# ค่าคงที่สำหรับการคำนวณ Rack Cooling Rate (ปรับได้ตามต้องการ)
+COOLING_FACTOR = 0.5  # ปัจจัยสมมติสำหรับปรับสเกล Rack Cooling Rate
+
 @app.post("/ocr")
 async def ocr(
     file: UploadFile = File(...), 
@@ -32,7 +35,7 @@ async def ocr(
     db: Session = Depends(get_db)
 ):
     """
-    Extract text from image using OCR
+    Extract text from image using OCR and calculate processing rates
     
     - **file**: Image file to process
     - **languages**: Comma-separated list of language codes (e.g. 'en,th,ja')
@@ -54,9 +57,16 @@ async def ocr(
         result = recognize_text(image, language_list)
         processing_time = time.time() - start_time
         
-        # Save original image
-        output_path = f"output/{int(time.time())}_ocr.jpg"
-        save_image(image, output_path)
+        # คำนวณ Fast Rate (operations per second)
+        fast_rate = 1.0 / processing_time if processing_time > 0 else 0.0
+        
+        # คำนวณ Rack Cooling Rate (สมมติเป็นหน่วยสมมติ เช่น efficiency units per second)
+        cooling_rate = 1.0 / (processing_time * COOLING_FACTOR) if processing_time > 0 else 0.0
+            
+        # Save processed image
+        timestamp = int(time.time())
+        processed_output_path = f"output/{timestamp}_ocr_processed.jpg"
+        save_image(image, processed_output_path)  
         
         # Save result to database
         db_result = models.ProcessingResult(
@@ -68,14 +78,18 @@ async def ocr(
         db.add(db_result)
         db.commit()
         
-        # Format response
+        # Format response with rates, dimensions, and created time
         response = {
             "text": result["text"],
-            "dimensions": result["dimensions"],
-            "text_regions": result["text_observations"],
-            "processing_time": processing_time,
-            "result_id": db_result.id,
-            "output_path": output_path
+            "dimensions": {
+                "width": result["dimensions"][0],
+                "height": result["dimensions"][1]
+            },
+            "processing_time": round(processing_time, 4),
+            "fast_rate": round(fast_rate, 4),
+            "rack_cooling_rate": round(cooling_rate, 4),
+            "processed_output_path": processed_output_path,
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
         # Add languages used if specified or detected
@@ -86,23 +100,14 @@ async def ocr(
         
         return response
     except Exception as e:
-        # Log the error for debugging
         print(f"Error in OCR endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
-
-
-@app.get("/supported_languages")
-async def supported_languages():
-    """
-    Get list of supported languages for OCR
-    """
-    return get_supported_languages()
 
 
 @app.post("/face_quality")
 async def face_quality(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
-    Detect face quality in image
+    Detect face quality in image and calculate processing rates
     """
     try:
         if not file.content_type.startswith("image/"):
@@ -115,9 +120,19 @@ async def face_quality(file: UploadFile = File(...), db: Session = Depends(get_d
         quality_score = detect_face_quality(image)
         processing_time = time.time() - start_time
 
-        # Save original image (no processed image for face quality)
-        output_path = f"output/{int(time.time())}_face.jpg"
-        save_image(image, output_path)
+        # คำนวณ Fast Rate (operations per second)
+        fast_rate = 1.0 / processing_time if processing_time > 0 else 0.0
+        
+        # คำนวณ Rack Cooling Rate
+        cooling_rate = 1.0 / (processing_time * COOLING_FACTOR) if processing_time > 0 else 0.0
+
+        # Save processed image
+        timestamp = int(time.time())
+        processed_output_path = f"output/{timestamp}_face_quality_processed.jpg"
+        save_image(image, processed_output_path) 
+        
+        # Get image dimensions
+        height, width = image.shape[:2]
         
         # Save result to database
         db_result = models.ProcessingResult(
@@ -130,13 +145,18 @@ async def face_quality(file: UploadFile = File(...), db: Session = Depends(get_d
         db.commit()
         
         return {
-            "quality_score": quality_score, 
-            "processing_time": processing_time,
-            "result_id": db_result.id,
-            "output_path": output_path
+            "quality_score": quality_score,
+            "dimensions": {
+                "width": width,
+                "height": height
+            },
+            "processing_time": round(processing_time, 4),
+            "fast_rate": round(fast_rate, 4),
+            "rack_cooling_rate": round(cooling_rate, 4),
+            "processed_output_path": processed_output_path,
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        # Log the error for debugging
         print(f"Error in face quality endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
@@ -144,7 +164,7 @@ async def face_quality(file: UploadFile = File(...), db: Session = Depends(get_d
 @app.post("/card_detection")
 async def card_detection(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
-    Detect card in image and correct perspective
+    Detect card in image, correct perspective, and calculate processing rates
     """
     try:
         if not file.content_type.startswith("image/"):
@@ -157,28 +177,43 @@ async def card_detection(file: UploadFile = File(...), db: Session = Depends(get
         processed_image = detect_card(image)
         processing_time = time.time() - start_time
         
-        # Save processed image
-        output_path = f"output/{int(time.time())}_card.jpg"
-        save_image(processed_image, output_path)
+        # คำนวณ Fast Rate (operations per second)
+        fast_rate = 1.0 / processing_time if processing_time > 0 else 0.0
+        
+        # คำนวณ Rack Cooling Rate
+        cooling_rate = 1.0 / (processing_time * COOLING_FACTOR) if processing_time > 0 else 0.0
+
+         # Save processed image
+        timestamp = int(time.time())
+        processed_output_path = f"output/{timestamp}_card_detection_processed.jpg"
+        save_image(image, processed_output_path)  
+        
+        # Get original image dimensions
+        height, width = image.shape[:2]
         
         # Save result to database
         db_result = models.ProcessingResult(
             filename=file.filename,
             processing_type="card_detection",
-            result=output_path,
+            result=processed_output_path,
             processing_time=processing_time
         )
         db.add(db_result)
         db.commit()
         
         return {
-            "message": "Card detected and corrected", 
-            "processing_time": processing_time,
-            "result_id": db_result.id,
-            "output_path": output_path
+            "message": "Card detected and corrected",
+            "dimensions": {
+                "width": width,
+                "height": height
+            },
+            "processing_time": round(processing_time, 4),
+            "fast_rate": round(fast_rate, 4),
+            "rack_cooling_rate": round(cooling_rate, 4),
+            "processed_output_path": processed_output_path,
+            "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        # Log the error for debugging
         print(f"Error in card detection endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
 
@@ -219,7 +254,6 @@ async def processing_speed_comparison(db: Session = Depends(get_db)):
             "card_detection": calculate_stats(card_detection_results)
         }
     except Exception as e:
-        # Log the error for debugging
         print(f"Error in processing speed comparison endpoint: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting processing stats: {str(e)}")
 

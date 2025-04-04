@@ -88,16 +88,16 @@ def recognize_text(image, languages=None):
         # Convert to top-left coordinates (Vision uses bottom-left origin)
         y = height - y - h
         
-        text_observations.append({
-            "text": text,
-            "confidence": result.confidence(),
-            "bounding_box": {
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h
-            }
-        })
+        # text_observations.append({
+        #     "text": text,
+        #     "confidence": result.confidence(),
+        #     "bounding_box": {
+        #         "x": x,
+        #         "y": y,
+        #         "width": w,
+        #         "height": h
+        #     }
+        # })
     
     return {
         "text": " ".join(full_text),
